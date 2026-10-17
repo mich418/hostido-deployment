@@ -1,4 +1,4 @@
-# hostido-php-deploy
+# hostido-deployment
 
 Wspólny workflow GitHub Actions (`workflow_call`), który wgrywa stronę PHP na hosting Hostido przez SSH i rsync.
 
@@ -17,7 +17,7 @@ Kolejność kroków:
 ```yaml
 jobs:
   deploy:
-    uses: mich418/hostido-php-deploy/.github/workflows/deploy.yml@v1
+    uses: mich418/hostido-deployment/.github/workflows/deploy.yml@v1
     with:
       remote_path: domains/example.com/app   # ścieżka względem katalogu domowego albo absolutna, bez "~"
       build_command: npm run build           # opcjonalnie
@@ -75,10 +75,11 @@ Jeśli chcesz celowo użyć istniejącego katalogu, opróżnij go albo utwórz w
 4. Zawartość `hostido_deploy` (klucz prywatny) wpisz jako sekret repozytorium wywołującego workflow.
 5. Katalog dokumentów domeny ustaw na publiczny podkatalog aplikacji (np. `<remote_path>/public`), żeby `.env`, `vendor/` i `var/` nie były dostępne z sieci.
 
-## Dostęp z innych prywatnych repozytoriów
+## Widoczność
 
-To repozytorium jest prywatne. Żeby inne repozytoria tego samego właściciela mogły z niego korzystać:
-Settings → Actions → General → Access → „Accessible from repositories owned by the user 'mich418'”.
+Repozytorium jest publiczne, więc każde repozytorium (także prywatne) może używać tego workflow bez dodatkowych ustawień. Nie zawiera żadnych sekretów: dane SSH, `.env` i adresy przekazuje repozytorium wywołujące.
+
+Gdyby kiedyś stało się prywatne, trzeba włączyć: Settings → Actions → General → Access → „Accessible from repositories owned by the user 'mich418'”.
 
 ## Wersjonowanie
 

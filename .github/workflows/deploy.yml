@@ -101,6 +101,24 @@ jobs:
           fi
           chmod 600 ~/.ssh/known_hosts
 
+      # rsync --delete wipes whatever is in remote_path, so only deploy into a missing or
+      # empty directory, or one marked by a previous deploy with .hostido-deploy.
+      - name: Check target directory
+        env:
+          SSH_HOST: ${{ secrets.ssh_host }}
+          SSH_PORT: ${{ secrets.ssh_port }}
+          SSH_USER: ${{ secrets.ssh_user }}
+          REMOTE_PATH: ${{ inputs.remote_path }}
+        run: |
+          case "$REMOTE_PATH" in
+            ''|/|.|./|~*|*'..'*)
+              echo "::error::remote_path '$REMOTE_PATH' is not allowed (empty, /, ., ~ or ..)"
+              exit 1 ;;
+          esac
+          remote_path_q=$(printf '%q' "$REMOTE_PATH")
+          ssh -i ~/.ssh/id_deploy -p "${SSH_PORT:-22}" "$SSH_USER@$SSH_HOST" \
+            "p=$remote_path_q; if [ -d \"\$p\" ] && [ -n \"\$(ls -A \"\$p\")\" ] && [ ! -f \"\$p/.hostido-deploy\" ]; then echo \"\$p is not empty and was not created by this workflow; refusing to deploy with --delete.\" >&2; exit 1; fi"
+
       - name: Upload files
         env:
           SSH_HOST: ${{ secrets.ssh_host }}
@@ -110,7 +128,7 @@ jobs:
           EXTRA_EXCLUDES: ${{ inputs.exclude }}
         run: |
           {
-            printf '%s\n' '.git/' '.github/' 'tests/' 'node_modules/' 'var/' '.env' '.env.*' 'phpunit.xml*' '.phpunit.cache/'
+            printf '%s\n' '.hostido-deploy' '.git/' '.github/' 'tests/' 'node_modules/' 'var/' '.env' '.env.*' 'phpunit.xml*' '.phpunit.cache/'
             printf '%s\n' "$EXTRA_EXCLUDES"
           } | sed '/^[[:space:]]*$/d' > "$RUNNER_TEMP/rsync-exclude"
           remote_path_q=$(printf '%q' "$REMOTE_PATH")
@@ -118,6 +136,7 @@ jobs:
             --rsync-path="mkdir -p $remote_path_q && rsync" \
             -e "ssh -i $HOME/.ssh/id_deploy -p ${SSH_PORT:-22}" \
             ./ "$SSH_USER@$SSH_HOST:$REMOTE_PATH/"
+          ssh -i ~/.ssh/id_deploy -p "${SSH_PORT:-22}" "$SSH_USER@$SSH_HOST" "touch $remote_path_q/.hostido-deploy"
 
       - name: Write .env
         env:

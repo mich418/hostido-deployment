@@ -7,9 +7,10 @@ Kolejność kroków:
 1. checkout repozytorium,
 2. `composer install --no-dev` (jeśli jest `composer.json` i ustawione `php_version`),
 3. `npm ci` + `build_command` (jeśli ustawione `build_command`, wymaga `package-lock.json`),
-4. `rsync -az --delete` do `remote_path`,
-5. zapis sekretu `dotenv` do `<remote_path>/.env` (prawa 600),
-6. GET na `post_deploy_url` (np. czyszczenie cache).
+4. kontrola katalogu docelowego (patrz niżej),
+5. `rsync -az --delete` do `remote_path`,
+6. zapis sekretu `dotenv` do `<remote_path>/.env` (prawa 600),
+7. GET na `post_deploy_url` (np. czyszczenie cache).
 
 ## Użycie
 
@@ -53,9 +54,18 @@ jobs:
 | `dotenv` | nie | Zawartość pliku `.env` |
 | `post_deploy_url` | nie | Adres wywoływany po deployu |
 
+### Ochrona przed skasowaniem cudzych plików
+
+`rsync --delete` usuwa z `remote_path` wszystko, czego nie ma w repozytorium. Dlatego workflow:
+
+- odrzuca `remote_path` pusty, `/`, `.`, zaczynający się od `~` albo zawierający `..`,
+- wgrywa pliki tylko do katalogu, który nie istnieje, jest pusty albo zawiera plik `.hostido-deploy` (tworzony przez workflow po pierwszym udanym deployu).
+
+Jeśli chcesz celowo użyć istniejącego katalogu, opróżnij go albo utwórz w nim `.hostido-deploy` ręcznie.
+
 ### Co nie jest nadpisywane ani usuwane na serwerze
 
-`.git/`, `.github/`, `tests/`, `node_modules/`, `var/`, `.env`, `.env.*`, `phpunit.xml*`, `.phpunit.cache/` oraz wzorce z `exclude`. `var/` to miejsce na cache i dane runtime aplikacji, a `.env` zapisuje osobny krok workflow.
+`.hostido-deploy`, `.git/`, `.github/`, `tests/`, `node_modules/`, `var/`, `.env`, `.env.*`, `phpunit.xml*`, `.phpunit.cache/` oraz wzorce z `exclude`. `var/` to miejsce na cache i dane runtime aplikacji, a `.env` zapisuje osobny krok workflow.
 
 ## Przygotowanie Hostido
 

@@ -1,0 +1,151 @@
+name: Deploy PHP site to Hostido
+
+on:
+  workflow_call:
+    inputs:
+      remote_path:
+        description: Target directory on the server (absolute, or relative to the SSH user's home; no "~").
+        type: string
+        required: true
+      php_version:
+        description: PHP version used for "composer install --no-dev". Empty skips Composer.
+        type: string
+        default: '8.3'
+      node_version:
+        description: Node.js version used when build_command is set.
+        type: string
+        default: '22'
+      build_command:
+        description: Optional build command run after "npm ci" (e.g. "npm run build").
+        type: string
+        default: ''
+      exclude:
+        description: Extra rsync exclude patterns, one per line. Excluded paths are never deleted on the server.
+        type: string
+        default: ''
+    secrets:
+      ssh_host:
+        required: true
+      ssh_user:
+        required: true
+      ssh_private_key:
+        required: true
+      ssh_port:
+        description: Defaults to 22.
+        required: false
+      ssh_known_hosts:
+        description: known_hosts line(s) for the server. When empty, ssh-keyscan is used.
+        required: false
+      dotenv:
+        description: Content written to <remote_path>/.env (chmod 600). Skipped when empty.
+        required: false
+      post_deploy_url:
+        description: URL requested with GET after a successful deploy (e.g. a cache purge). Skipped when empty.
+        required: false
+
+concurrency:
+  group: hostido-deploy-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for composer.json
+        id: composer
+        run: |
+          if [ -n "${{ inputs.php_version }}" ] && [ -f composer.json ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: shivammathur/setup-php@v2
+        if: steps.composer.outputs.enabled == 'true'
+        with:
+          php-version: ${{ inputs.php_version }}
+          tools: composer
+
+      - name: Install Composer dependencies
+        if: steps.composer.outputs.enabled == 'true'
+        run: composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction --no-progress
+
+      - uses: actions/setup-node@v4
+        if: inputs.build_command != ''
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: npm
+
+      - name: Build
+        if: inputs.build_command != ''
+        env:
+          BUILD_COMMAND: ${{ inputs.build_command }}
+        run: |
+          npm ci
+          bash -c "$BUILD_COMMAND"
+
+      - name: Configure SSH
+        env:
+          SSH_HOST: ${{ secrets.ssh_host }}
+          SSH_PORT: ${{ secrets.ssh_port }}
+          SSH_PRIVATE_KEY: ${{ secrets.ssh_private_key }}
+          SSH_KNOWN_HOSTS: ${{ secrets.ssh_known_hosts }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          if [ -n "$SSH_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "${SSH_PORT:-22}" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Upload files
+        env:
+          SSH_HOST: ${{ secrets.ssh_host }}
+          SSH_PORT: ${{ secrets.ssh_port }}
+          SSH_USER: ${{ secrets.ssh_user }}
+          REMOTE_PATH: ${{ inputs.remote_path }}
+          EXTRA_EXCLUDES: ${{ inputs.exclude }}
+        run: |
+          {
+            printf '%s\n' '.git/' '.github/' 'tests/' 'node_modules/' 'var/' '.env' '.env.*' 'phpunit.xml*' '.phpunit.cache/'
+            printf '%s\n' "$EXTRA_EXCLUDES"
+          } | sed '/^[[:space:]]*$/d' > "$RUNNER_TEMP/rsync-exclude"
+          remote_path_q=$(printf '%q' "$REMOTE_PATH")
+          rsync -az --delete --exclude-from="$RUNNER_TEMP/rsync-exclude" \
+            --rsync-path="mkdir -p $remote_path_q && rsync" \
+            -e "ssh -i $HOME/.ssh/id_deploy -p ${SSH_PORT:-22}" \
+            ./ "$SSH_USER@$SSH_HOST:$REMOTE_PATH/"
+
+      - name: Write .env
+        env:
+          SSH_HOST: ${{ secrets.ssh_host }}
+          SSH_PORT: ${{ secrets.ssh_port }}
+          SSH_USER: ${{ secrets.ssh_user }}
+          REMOTE_PATH: ${{ inputs.remote_path }}
+          DOTENV: ${{ secrets.dotenv }}
+        run: |
+          if [ -z "$DOTENV" ]; then
+            echo "No dotenv secret, skipping."
+            exit 0
+          fi
+          remote_path_q=$(printf '%q' "$REMOTE_PATH")
+          printf '%s\n' "$DOTENV" | ssh -i ~/.ssh/id_deploy -p "${SSH_PORT:-22}" "$SSH_USER@$SSH_HOST" \
+            "umask 077 && cat > $remote_path_q/.env.tmp && mv $remote_path_q/.env.tmp $remote_path_q/.env"
+
+      - name: Post-deploy request
+        env:
+          POST_DEPLOY_URL: ${{ secrets.post_deploy_url }}
+        run: |
+          if [ -z "$POST_DEPLOY_URL" ]; then
+            echo "No post_deploy_url secret, skipping."
+            exit 0
+          fi
+          curl -fsS --retry 3 --retry-all-errors --max-time 30 "$POST_DEPLOY_URL" > /dev/null
+          echo "Post-deploy request succeeded."
+
+      - name: Remove SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_deploy
